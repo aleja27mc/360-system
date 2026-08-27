@@ -4,6 +4,29 @@ Este repositorio contiene toda la entrega: el diagrama y el documento de arquite
 Parte 1 (en `docs/arquitectura`), el código del servicio de la Parte 2, y las respuestas de las
 Partes 3 y 4 más abajo en este mismo documento.
 
+## Índice
+
+- [Uso de IA](#uso-de-ia)
+- [Parte 1: arquitectura (resumen)](#parte-1-arquitectura-resumen)
+  - [Los supuestos que hice](#los-supuestos-que-hice)
+  - [Cómo se comunican los componentes](#cómo-se-comunican-los-componentes)
+  - [De dónde sale cada dato](#de-dónde-sale-cada-dato)
+- [Parte 2: servicio implementado](#parte-2-servicio-implementado)
+  - [Contrato](#contrato)
+  - [Modelo de datos](#modelo-de-datos)
+  - [Seguridad de este servicio en particular](#seguridad-de-este-servicio-en-particular)
+  - [Stack](#stack)
+  - [Cómo correrlo](#cómo-correrlo)
+  - [Tests](#tests)
+  - [Dos errores que encontré probando el código](#dos-errores-que-encontré-probando-el-código)
+  - [Generar tokens de prueba](#generar-tokens-de-prueba)
+- [Parte 3: seguridad y comunicación](#parte-3-seguridad-y-comunicación)
+  - [3.1 Seguridad](#31-seguridad)
+  - [3.2 Comunicación](#32-comunicación)
+- [Parte 4: operación y calidad](#parte-4-operación-y-calidad)
+  - [Escenario A: la carga académica falla de forma intermitente](#escenario-a-la-carga-académica-falla-de-forma-intermitente)
+  - [Escenario B: un estudiante reclama que consultaron o alteraron su información](#escenario-b-un-estudiante-reclama-que-consultaron-o-alteraron-su-información)
+
 ## Uso de IA
 
 Usé Claude Code durante la mayoría de la prueba, de la siguiente manera:
