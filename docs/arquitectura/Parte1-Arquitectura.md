@@ -1,87 +1,92 @@
-# Vista 360° del Estudiante — Parte 1: Diseño de la solución
+# Vista 360° del Estudiante: Parte 1, Diseño de la solución
 
-Ver `diagrama-arquitectura.svg` para el diagrama completo. Este documento explica las
-decisiones y los supuestos que lo sustentan.
+El diagrama completo está en `diagrama-arquitectura.svg`. Aquí explico las decisiones y los
+supuestos detrás de ese diagrama.
 
-## Supuestos declarados
+## Los supuestos:
 
-1. Vista 360° es una capa de **agregación + datos propios**, no un ERP paralelo. Académico,
-   financiero y LMS se leen *read-through* desde los sistemas fuente (no se duplican, salvo
-   cache de segundos donde aplica); los reportes de acompañamiento, alertas y solicitudes son
-   datos **nativos** de Vista 360° porque no existen en ningún sistema previo.
-2. Sistemas fuente asumidos, con roles genéricos que representan el ecosistema típico de una
-   universidad: **Sistema Académico** (datos personales, matrícula, notas, condición
-   académica), **Sistema Financiero** (saldos, becas, estado de cuenta), **LMS** (actividad de
-   campus virtual), y el **Data Warehouse** como destino analítico (nunca fuente de datos
-   operacionales).
-3. Los sistemas fuente exponen o pueden exponer API REST/SOAP; si alguno no puede, el
-   fallback es lectura directa vía vista SQL/ODBC — declarado explícitamente como una
-   **excepción de alto riesgo**, no como una alternativa equivalente a la integración vía API.
-4. El estado financiero pedido "de inmediato" (Escenario A de la Parte 3) implica **consulta
-   síncrona sin cache** (o TTL de segundos): la exactitud del dato pesa más que la latencia,
-   porque puede condicionar decisiones del estudiante (matrícula, grado).
-5. El cambio de condición académica (Escenario B de la Parte 3) es un evento de negocio con
-   múltiples consumidores desacoplados en el tiempo (acompañamiento, Data Warehouse) → se
-   resuelve **asíncrono vía bus de eventos**, no por polling.
-6. Existe un **IdP institucional** (tipo SSO/OIDC) — Vista 360° se federa contra él, no
-   reinventa gestión de usuarios ni contraseñas.
-7. La asignación acompañante↔estudiante es un dato **nuevo**, propio de Vista 360°: no existe
-   en ningún sistema del ecosistema actual, por lo tanto se modela y persiste ahí.
+1. Vista 360° la pienso como una capa de agregación más datos propios, no como un ERP paralelo.
+   Lo académico, lo financiero y el LMS se leen en vivo desde los sistemas fuente (sin
+   duplicar nada, salvo quizás un cache de pocos segundos donde tenga sentido); los reportes de
+   acompañamiento, las alertas y las solicitudes sí son datos nuevos, porque no existen en
+   ningún sistema previo.
+2. Asumí un ecosistema típico de universidad: un Sistema Académico (datos personales,
+   matrícula, notas, condición académica), un Sistema Financiero (saldos, becas, estado de
+   cuenta), un LMS (actividad de campus virtual), y un Data Warehouse que solo consume, nunca
+   es fuente de datos operacionales.
+3. Doy por hecho que los sistemas fuente exponen o pueden exponer API REST/SOAP. Si alguno no
+   puede, dejo como salida de emergencia leer directo de una vista SQL, pero lo marco como una
+   excepción de alto riesgo, no como algo equivalente a integrarse por API.
+4. Si el estado financiero se pide "de inmediato" (Escenario A de la Parte 3), entiendo que
+   eso implica consulta síncrona sin cache o con TTL de segundos, porque ahí la exactitud pesa
+   más que la latencia y puede condicionar una matrícula o un grado.
+5. Un cambio de condición académica (Escenario B de la Parte 3) es un evento de negocio con
+   varios consumidores que no necesitan enterarse al mismo tiempo (acompañamiento, Data
+   Warehouse), así que lo resuelvo con un bus de eventos, no con polling.
+6. Asumo que la universidad ya tiene un IdP institucional (tipo SSO/OIDC) y que Vista 360° se
+   federa contra él en vez de inventar su propio sistema de usuarios y contraseñas.
+7. La asignación acompañante-estudiante es información nueva, propia de Vista 360°: no existe
+   en ningún sistema del ecosistema actual, así que se modela y persiste ahí.
 
-## Componentes y comunicación (ver diagrama)
+## Cómo se comunican los componentes (ver diagrama)
 
-- **Frontend (SPA)** → HTTPS + JWT → **BFF / API Gateway** (Spring Boot): valida el JWT,
-  autoriza por rol, agrega las respuestas de cada sección de la vista, y propaga un
-  `X-Correlation-Id` de punta a punta.
-- El BFF llama de forma **síncrona** (REST interno, timeout corto + circuit breaker) a un
-  **adaptador por cada sistema fuente** (Académico, Financiero, LMS) y al **servicio de
-  Acompañamiento**, que es CRUD directo sobre una base Oracle propia porque su dato no existe
-  en ningún otro sistema.
-- Cada adaptador traduce el protocolo real del sistema fuente (REST, SOAP, o vista SQL como
-  fallback) a un contrato REST/JSON uniforme hacia el BFF.
-- El **Sistema Académico publica eventos de negocio** (`AcademicStatusChanged`, con `eventId`
-  y `timestamp` para consumo idempotente y ordenado) a un **bus de eventos (Kafka)**.
-  Consumidores independientes: el **motor de alertas tempranas** de acompañamiento, y un
-  **pipeline ETL hacia el Data Warehouse**. El DW se completa con batch/CDC nocturno para
-  datos históricos que no viajan como eventos.
+El frontend le habla al BFF por HTTPS con JWT. El BFF valida ese JWT, autoriza según el rol,
+arma la respuesta juntando cada sección de la vista, y propaga un `X-Correlation-Id` de punta a
+punta.
 
-## Decisiones clave (justificación en una línea cada una)
+De ahí, el BFF llama de forma síncrona (REST interno, con timeout corto y circuit breaker) a un
+adaptador por cada sistema fuente (Académico, Financiero, LMS) y al servicio de Acompañamiento,
+que es CRUD directo sobre una base Oracle propia porque su dato no vive en ningún otro lado.
+Cada adaptador se encarga de traducir el protocolo real del sistema fuente (REST, SOAP, o una
+vista SQL si no queda otra) a un contrato REST/JSON uniforme hacia el BFF.
 
-- **BFF único** como entrada del frontend: centraliza AuthN/AuthZ y logging, evita exponer la
-  topología interna del ecosistema. Cada sección de la vista (académico/financiero/LMS)
-  **degrada de forma independiente** — que el LMS esté caído no debe tumbar toda la vista.
-- **Un adaptador por sistema fuente**, no un integrador monolítico: aísla el ciclo de cambio
-  de cada sistema legado sin acoplar sus fallas entre sí.
-- **Lectura síncrona para consulta**: los sistemas fuente son la fuente de verdad; no se
-  replican para evitar el riesgo de mostrar datos desactualizados en decisiones sensibles.
-- **Datos de acompañamiento en BD propia**: es información nueva de negocio, no existe fuente
-  externa que integrar.
-- **Bus de eventos solo para eventos de negocio reales** (cambio de condición, alertas), no
-  para todo el tráfico: evita el over-engineering de una arquitectura orientada a eventos
-  completa cuando no se necesita.
-- **CDC como fallback de publicación de eventos es un supuesto de alto riesgo**: el acceso a
-  redo logs de un ERP institucional rara vez está disponible en la práctica; se declara como
-  algo que requeriría validación con el equipo dueño del sistema académico, no como una
-  alternativa intercambiable con la publicación activa de eventos.
-- **Autorización revalidada en cada servicio backend**, nunca confiada únicamente al gateway
-  (defensa en profundidad) — desarrollado en detalle en la Parte 3.
-- **Auditoría de lecturas + correlation-id de punta a punta** sembrados desde el diseño, no
-  añadidos después de un incidente — necesarios para los escenarios de operación de la
-  Parte 4 (diagnóstico de fallas intermitentes y respuesta a reclamos de acceso indebido).
+Por otro lado, el Sistema Académico publica eventos de negocio (`AcademicStatusChanged`, con
+`eventId` y `timestamp` para poder consumirlos de forma idempotente y en orden) a un bus tipo
+Kafka. De ese bus consumen, de forma independiente entre sí, el motor de alertas tempranas de
+acompañamiento y un pipeline hacia el Data Warehouse. El DW se completa además con un batch/CDC
+nocturno para los datos históricos que no viajan como eventos.
+
+## Por qué estas decisiones
+
+Puse un solo BFF como entrada del frontend para no exponer la topología interna del ecosistema
+y para centralizar autenticación, autorización y logging en un solo lugar. Cada sección de la
+vista (académico, financiero, LMS) degrada por separado. Si el LMS está caído, no tiene
+sentido que el estudiante se quede sin ver ni siquiera sus notas.
+
+Cada sistema fuente tiene su propio adaptador en vez de meter todo en un integrador único,
+para que el ciclo de cambios de cada sistema legado quede aislado y no arrastre fallas de uno
+a otro.
+
+Las consultas las dejo síncronas porque los sistemas fuente siguen siendo la fuente de verdad;
+no los replico porque eso metería el riesgo de mostrar información desactualizada justo en
+decisiones que importan.
+
+Los datos de acompañamiento van en una base propia simplemente porque no hay ningún sistema
+externo del que integrarlos.
+
+El bus de eventos lo reservo para eventos de negocio de verdad (cambio de condición, alertas),
+no para todo el tráfico. Meter eventos en cada interacción hubiera sido sobre-ingeniería
+para lo que pide el caso.
+
+Vale la pena aclarar un punto: usar CDC como respaldo para publicar eventos es
+un supuesto de bastante riesgo. En la práctica, pocas universidades dan acceso a los redo logs
+de su ERP académico, así que esto lo dejo anotado como algo que habría que validar con el
+equipo dueño del sistema antes de darlo por sentado, no como una alternativa intercambiable con
+que el propio sistema publique los eventos activamente.
+
+La autorización se revalida en cada servicio backend, nunca queda solo en manos del gateway
+(esto lo desarrollo con más detalle en la Parte 3, pero la decisión de fondo ya está tomada
+aquí). Y la auditoría de lecturas junto con el correlation-id de punta a punta los pienso desde
+el diseño, no como algo que se agrega después de un incidente: son justamente lo que hace
+posible resolver los escenarios de operación de la Parte 4 (diagnosticar fallas intermitentes y
+responder a un reclamo de acceso indebido).
 
 ## De dónde sale cada dato
 
-| Dato | Origen | Por qué |
-|---|---|---|
-| Datos personales, matrícula, notas, condición académica | Sistema Académico | Fuente única de verdad académica |
-| Estado financiero / saldos | Sistema Financiero | Fuente única de verdad financiera |
-| Actividad en campus virtual | LMS | Solo el LMS tiene esos registros |
-| Reportes, alertas, solicitudes de acompañamiento; asignación acompañante↔estudiante | BD propia Vista 360° | Dato nuevo, no existe en el ecosistema previo |
-| Modelos analíticos | Data Warehouse | Consumidor, no fuente |
-
-## Relación con la Parte 2
-
-El servicio implementado en la Parte 2 (`GET /api/v1/students/{studentId}/courses`) es la
-**implementación de referencia del Adaptador Académico** de este diagrama: mismo contrato REST
-que el BFF consumiría en producción, con un backing store propio y autocontenido para que sea
-ejecutable de punta a punta sin depender de un ERP real durante la prueba técnica.
+| Dato                                                                                   | Origen                | Por qué                                                 |
+| -------------------------------------------------------------------------------------- | --------------------- | -------------------------------------------------------- |
+| Datos personales, matrícula, notas, condición académica                             | Sistema Académico    | Es la fuente única de verdad académica                 |
+| Estado financiero / saldos                                                             | Sistema Financiero    | Es la fuente única de verdad financiera                 |
+| Actividad en campus virtual                                                            | LMS                   | Es el único sistema que registra eso                    |
+| Reportes, alertas, solicitudes de acompañamiento; asignación acompañante-estudiante | BD propia Vista 360° | Es información nueva, no existe en el ecosistema previo |
+| Modelos analíticos                                                                    | Data Warehouse        | Solo consume, no genera nada                             |
