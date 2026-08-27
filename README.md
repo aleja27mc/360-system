@@ -1,7 +1,8 @@
 # Vista 360° del Estudiante: Prueba Técnica
 
-Este repo contiene la Parte 2 de la prueba (el servicio) más las respuestas de las Partes 3 y 4.
-El diseño de arquitectura de la Parte 1 (diagrama + documento) lo entregué aparte.
+Este repositorio contiene toda la entrega: el diagrama y el documento de arquitectura de la
+Parte 1 (en `docs/arquitectura`), el código del servicio de la Parte 2, y las respuestas de las
+Partes 3 y 4 más abajo en este mismo documento.
 
 ## Uso de IA
 
